@@ -2,21 +2,14 @@
 
 ## Overview
 
-## Try it out
-
-### Prerequisites
-
-* Prereq 1
-* Prereq 2
-* Prereq 3
-
-### Build & Run
-
-1. Step 1
-2. Step 2
-3. Step 3
+This project contains the source for the Carbon Black App Control product
+for Linux. The project provides events and access control decisions to
+userspace. There are several event reporting options and can go into a full
+audit mode.
 
 ## Documentation
+
+Checkout the source [README](app-control-event-kernel-module/README.md).
 
 ## Contributing
 
@@ -26,4 +19,4 @@ signed as described on that page. Your signature certifies that you wrote the pa
 as an open-source patch. For more detailed information, refer to [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
-
+See [LICENSE](LICENSE)
