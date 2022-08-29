@@ -16,6 +16,7 @@
 #include "task_cache.h"
 #include "preaction_hooks.h"
 #include "config.h"
+#include "protect.h"
 
 // Current contains most of possibly enabled LSM hooks
 // except for file CLOSE.
@@ -33,6 +34,7 @@
         DYNSEC_HOOK_TYPE_PTRACE    |\
         DYNSEC_HOOK_TYPE_SIGNAL    |\
         DYNSEC_HOOK_TYPE_MMAP      |\
+        DYNSEC_HOOK_TYPE_CLOSE     |\
         DYNSEC_HOOK_TYPE_INODE_FREE)
 
 #define DYNSEC_PROCESS_HOOKS (\
@@ -44,11 +46,18 @@
 static uint32_t process_hooks = DYNSEC_PROCESS_HOOKS;
 
 static char lsm_hooks_str[64];
+
+bool protect_on_connect = false;
+
+uint32_t stall_timeout_ctr_limit = DYNSEC_STALL_TIMEOUT_CTR_LIMIT;
+
 // Hooks to only allow for kmod instance. Superset.
 module_param_string(lsm_hooks, lsm_hooks_str,
                     sizeof(lsm_hooks_str), 0644);
 
 module_param(process_hooks, uint, 0644);
+module_param(protect_on_connect, bool, 0644);
+module_param(stall_timeout_ctr_limit, uint, 0644);
 
 // Special Globals
 DEFINE_MUTEX(global_config_lock);
@@ -64,9 +73,16 @@ static void print_config(struct dynsec_config *dynsec_config)
     pr_info("dynsec_config: bypass_mode:%d stall_mode:%d\n",
             dynsec_config->bypass_mode, dynsec_config->stall_mode);
     pr_info("dynsec_config: stall_timeout:%u\n", dynsec_config->stall_timeout);
-    pr_info("dynsec_config: lazy_notifier:%d queue_threshold:%d notify_threshold:%d",
+    pr_info("dynsec_config: stall_timeout_continue:%u\n",
+            dynsec_config->stall_timeout_continue);
+    pr_info("dynsec_config: stall_timeout_deny:%u\n",
+            dynsec_config->stall_timeout_deny);
+    pr_info("dynsec_config: lazy_notifier:%d queue_threshold:%d notify_threshold:%d\n",
             dynsec_config->lazy_notifier, dynsec_config->queue_threshold,
             dynsec_config->notify_threshold);
+    pr_info("dynsec_config: send_files %#x\n", dynsec_config->send_files);
+    pr_info("dynsec_config: protect_mode: %#x\n", dynsec_config->protect_mode);
+    pr_info("dynsec_config: ignore_mode: %#x\n", dynsec_config->ignore_mode);
     pr_info("dynsec_config: lsm_hooks:%#llx process_hooks:%#llx preaction_hooks:%#llx\n",
             dynsec_config->lsm_hooks, dynsec_config->process_hooks,
             dynsec_config->preaction_hooks);
@@ -100,6 +116,9 @@ static int __init dynsec_init(void)
 {
     pr_info("Initializing Dynamic Security Module Brand(%s)\n",
            THIS_MODULE->name);
+
+    // Explicitly enable protection on connect
+    (void)dynsec_protect_init();
 
     setup_lsm_hooks();
 
@@ -153,6 +172,7 @@ static void __exit dynsec_exit(void)
 {
     pr_info("Exiting: %s\n", THIS_MODULE->name);
 
+    dynsec_protect_shutdown();
 
     dynsec_chrdev_shutdown();
 

@@ -56,8 +56,10 @@ $(MODULE_NAME)-objs := \
 	factory.o \
 	stall_reqs.o \
 	stall_tbl.o \
+	protect.o \
 	path_utils.o \
 	task_utils.o \
+	wait.o \
 
 
 .PHONY: clean

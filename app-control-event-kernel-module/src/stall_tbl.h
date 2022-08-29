@@ -5,6 +5,7 @@
 #include "dynsec.h"
 #include "config.h"
 #include <linux/irq_work.h>
+#include <linux/ktime.h>
 
 struct stall_bkt {
     spinlock_t lock;
@@ -26,18 +27,33 @@ struct stall_entry {
     struct stall_key key;
     struct list_head list;
 
-#define DYNSEC_STALL_MODE_STALL     0x00000000
-#define DYNSEC_STALL_MODE_RESUME    0x00000001
-#define DYNSEC_STALL_MODE_DISABLE   0x00000002
-#define DYNSEC_STALL_MODE_SHUTDOWN  0x00000004
+// Task is stalling
+#define DYNSEC_STALL_MODE_STALL     0x00000001
+// Resume normal execution
+#define DYNSEC_STALL_MODE_RESUME    0x00000002
+// Stalling was disabled
+#define DYNSEC_STALL_MODE_DISABLE   0x00000004
+// Client disconnect or kmod shutdown
+#define DYNSEC_STALL_MODE_SHUTDOWN  0x00000008
     u32 mode;  // switch to atomic or test_bit/set_bit?
-    struct timespec start; // rough duration of in tbl/stalled
+
+    // time event got added to queue
+    ktime_t start; // rough duration of entry in tbl/stalled
+
     wait_queue_head_t wq; // Optionally we could have this be per-bucket not per-entry
 
     unsigned long inode_addr;
     spinlock_t lock;    // likely not needed but shouldn't hurt
     int response;
+    unsigned int stall_timeout;
+
+    // Extra DynSec event header data
+    uint16_t report_flags;
+    uint64_t intent_req_id;
 };
+
+// TODO check ktime_get_raw
+#define dynsec_current_ktime  ktime_get_real()
 
 struct stall_q {
     spinlock_t lock;
@@ -65,10 +81,16 @@ static inline bool stall_tbl_enabled(struct stall_tbl *tbl)
     return (tbl && tbl->enabled);
 }
 
+static inline bool hooks_enabled(struct stall_tbl *tbl)
+{
+    return !bypass_mode_enabled() && stall_tbl_enabled(tbl);
+}
+
 extern struct stall_tbl *stall_tbl_alloc(gfp_t mode);
 
 extern int stall_tbl_resume(struct stall_tbl *tbl, struct stall_key *key,
-                            int response, unsigned long inode_cache_flags);
+                            int response, unsigned long inode_cache_flags,
+                            unsigned int overrided_stall_timeout);
 
 extern void stall_tbl_shutdown(struct stall_tbl *stbl);
 
@@ -89,3 +111,5 @@ extern int stall_tbl_remove_entry(struct stall_tbl *tbl, struct stall_entry *ent
 extern u32 stall_queue_size(struct stall_tbl *tbl);
 
 extern struct dynsec_event *stall_queue_shift(struct stall_tbl *tbl, size_t space);
+
+extern void stall_tbl_wait_statistics(struct seq_file *m);
