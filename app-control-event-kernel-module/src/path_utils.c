@@ -618,6 +618,13 @@ char *build_preaction_path(int dfd, const char __user *filename,
         goto out_err;
     }
 
+    // check if connected client is interested in this
+    // file system type
+    if (!__is_client_concerned_filesystem(parent_path.dentry->d_sb)) {
+        err_ret = -EINVAL;
+        goto out_err;
+    }
+
     if (file) {
         fill_in_preaction_data(file, &parent_path);
     }
