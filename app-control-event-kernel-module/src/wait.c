@@ -197,6 +197,21 @@ static void do_stall_timing_records(struct stall_entry *entry)
               ctr, sum, g_avg_stall_time, g_max_stall_time);
 }
 
+void stall_tbl_wait_statistics(struct seq_file *m)
+{
+    u64 avg, max;
+    spin_lock(&g_stall_timing_lock);
+    avg = g_avg_stall_time;
+    max = g_max_stall_time;
+    spin_unlock(&g_stall_timing_lock);
+    seq_printf(m, "   stall table average wait time: %lld.%06lld msec",
+                  avg/1000000, avg % 1000000);
+    seq_puts(m, "\n");
+    seq_printf(m, "   stall table average wait time: %lld.%06lld msec",
+                  max/1000000, max % 1000000);
+    seq_puts(m, "\n");
+}
+
 int dynsec_wait_event_timeout(struct dynsec_event *dynsec_event, int *response,
                               gfp_t mode)
 {

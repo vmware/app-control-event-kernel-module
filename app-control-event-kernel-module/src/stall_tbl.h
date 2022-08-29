@@ -112,4 +112,5 @@ extern u32 stall_queue_size(struct stall_tbl *tbl);
 
 extern struct dynsec_event *stall_queue_shift(struct stall_tbl *tbl, size_t space);
 
+extern void stall_tbl_display_buckets(struct stall_tbl *stall_tbl, struct seq_file *m);
 extern void stall_tbl_wait_statistics(struct seq_file *m);

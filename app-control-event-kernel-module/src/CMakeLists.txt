@@ -153,6 +153,7 @@ set(SOURCE_FILES
     path_utils.h
     task_utils.c
     task_utils.h
+    proc_stats.c
     wait.c
     wait.h
     ../include/dynsec.h
@@ -181,30 +182,3 @@ foreach(KERNEL_NAME ${KERNEL_LIST})
             SOURCE_FILES        ${SOURCE_FILES}
             USE_NATIVE_COMPILER)
 endforeach()
-
-file (GLOB SRC_FILES
-        RELATIVE $ENV{ORIGINAL_SOURCE}
-        *.h
-        *.c
-        )
-
-# cb_check_kernel_files(
-#         SOURCE_DIR          $ENV{ORIGINAL_SOURCE}
-#         IGNORE_TAGS         CODE_INDENT
-#         CONSTANT_COMPARISON
-#         LEADING_SPACE
-#         LINUX_VERSION_CODE
-#         NEW_TYPEDEFS
-#         OPEN_BRACE
-#         SUSPECT_CODE_INDENT
-#         TRAILING_STATEMENTS
-#         AVOID_EXTERNS
-#         # checkpatch.pl does not like new typedefs.  We possibly should list all the typedefs we add here, but for now
-#         #  I am only listing the ones that are giving me issues.
-#         #  If you get the error `need consistent spacing around "*"` then add the type here.
-#         NEW_TYPES           CB_FILE_TYPE
-#         ProcessContext
-#         CB_EVENT_DNS_RESPONSE
-#         SOURCE_FILES        ${SRC_FILES}
-# )
-
