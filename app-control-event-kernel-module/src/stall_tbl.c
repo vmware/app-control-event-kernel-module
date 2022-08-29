@@ -147,8 +147,8 @@ static void stall_tbl_wake_entries(struct stall_tbl *stall_tbl)
         flags = lock_stall_bkt(&stall_tbl->bkt[i], flags);
         list_for_each_entry_safe(entry, tmp, &stall_tbl->bkt[i].list,
                       list) {
-            entry->mode = DYNSEC_STALL_MODE_DISABLE;
             spin_lock(&entry->lock);
+            entry->mode = DYNSEC_STALL_MODE_DISABLE;
             entry->response = DYNSEC_RESPONSE_ALLOW;
             spin_unlock(&entry->lock);
 
