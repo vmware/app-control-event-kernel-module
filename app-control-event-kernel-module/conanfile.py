@@ -32,6 +32,10 @@ class DynSec(CbConanFile):
         "KERNEL_RHEL_8_1_VERSION",
         "KERNEL_RHEL_8_2_VERSION",
         "KERNEL_RHEL_8_3_VERSION",
+        "KERNEL_RHEL_8_4_VERSION",
+        "KERNEL_RHEL_8_5_VERSION",
+        "KERNEL_RHEL_8_6_VERSION",
+        "KERNEL_RHEL_9_0_VERSION",
         # Temporarily use this static version
         "Kernel_4.18.0-305.19.1.el8_4.x86_64/cb-1119@re/develop",
     ]

@@ -16,7 +16,7 @@ userspace entrypoints that may contain more helpful context clues before
 hitting the requesting acess control.
 
 ## Supported Kernel Versions
-The kernel module currently support EL7 and EL8 based distros. However
+The kernel module currently support EL7, EL8 and EL9 based distros. However
 this could support other kernels with some better kver checks. Source does
 compile for some EL6 kernels but is not supported.
 
@@ -88,6 +88,28 @@ When the inherit recursive option is set in a label, it will retain the
 inherit options that normally are unset on a fork. This is the greediest
 form of label retention and is meant to label process trees.
 
+### statistics in proc file
+The module creates an entry in the proc file system 
+/proc/cb\_appc\_events\_NNNNN\_stats file contains the following
+information:
+ * dynsec config:    shows current value of bypass mode, stall mode etc.
+ * stall queue size: shows current size of stall queue.
+ * stall timeout events: shows number of continuous events for which user
+                         space does not respond within 5 seconds.
+ * access denied events: shows number of events for which access
+                         was denied.
+ * stall table average wait time: time average for 64 events (in msec)
+                       Each value is amount of time a event stays in the
+                       stall queue of kernel module.
+ * stall table maximum wait time: maximum time spend in the stall queue
+                       in milliseconds
+ * StallTable buckets: number of (non-zero) entries in stall table hash buckets.
+                       hash bucket number and number of entries
+ * TaskCache buckets : number of (non-zero) entries in task cache hash buckets.
+                       hash bucket number and number of entries
+ * InodeCache buckets: number of (non-zero) entries in inode cache hash buckets.
+                       hash bucket number and number of entries
+ 
 ### Dynamic debugging
 The source code uses dynamic debug macros which can be enabled at run
 time to trace the code flow. This works only if the kernel is compiled

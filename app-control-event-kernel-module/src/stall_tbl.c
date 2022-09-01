@@ -558,3 +558,23 @@ int stall_tbl_remove_by_key(struct stall_tbl *tbl, struct stall_key *key)
     return ret;
 }
 #endif
+
+void stall_tbl_display_buckets(struct stall_tbl *stall_tbl, struct seq_file *m)
+{
+    unsigned long flags;
+    u32 i, size;
+
+    pr_debug("Display stall table non-zero bucket sizes\n");
+    for (i = 0; i < STALL_BUCKETS; i++) {
+        size = 0;
+        flags = lock_stall_bkt(&stall_tbl->bkt[i], flags);
+        if (stall_tbl->bkt[i].size) {
+            size = stall_tbl->bkt[i].size;
+        }
+        unlock_stall_bkt(&stall_tbl->bkt[i], flags);
+        if (size) {
+            seq_printf(m, "Stall Bucket %06d: size: %d", i, size);
+            seq_puts(m, "\n");
+        }
+    }
+}
