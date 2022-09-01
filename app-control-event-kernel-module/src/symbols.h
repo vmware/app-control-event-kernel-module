@@ -15,7 +15,8 @@ extern int dynsec_module_name(unsigned long addr, char *modname, size_t size);
 #define DECL_ARG_1(t,a) OUR_DECL(t, a)regs->di
 #define DECL_ARG_2(t,a) OUR_DECL(t, a)regs->si
 #define DECL_ARG_3(t,a) OUR_DECL(t, a)regs->dx
-#define DECL_ARG_4(t,a) OUR_DECL(t, a)regs->r10
+// Usually cx for non-syscall entry arg
+#define DECL_ARG_4(t,a) OUR_DECL(t, a)regs->cx
 #define DECL_ARG_5(t,a) OUR_DECL(t, a)regs->r8
 #define DECL_ARG_6(t,a) OUR_DECL(t, a)regs->r9
 #endif

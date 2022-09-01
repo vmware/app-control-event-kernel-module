@@ -9,7 +9,6 @@
 #include "symbols.h"
 
 #include "stall_reqs.h"
-#include "logging.h"
 #include "path_utils.h"
 #include "task_utils.h"
 #include "tracepoints.h"
@@ -99,8 +98,8 @@ static void setup_lsm_hooks(void)
 
 static int __init dynsec_init(void)
 {
-    DS_LOG(DS_INFO, "Initializing Dynamic Security Module Brand(%s)",
-           CB_APP_MODULE_NAME);
+    pr_info("Initializing Dynamic Security Module Brand(%s)\n",
+           THIS_MODULE->name);
 
     setup_lsm_hooks();
 
@@ -114,12 +113,12 @@ static int __init dynsec_init(void)
     dynsec_task_utils_init();
 
     if (!dynsec_init_tp(&global_config)) {
-        pr_info("Unable to load process tracepoints\n");
+        pr_err("Unable to load process tracepoints\n");
         return -EINVAL;
     }
 
     if (!dynsec_init_lsmhooks(&global_config)) {
-        pr_info("Unable to load LSM hooks\n");
+        pr_err("Unable to load LSM hooks\n");
         dynsec_tp_shutdown();
         return -EINVAL;
     }
@@ -141,16 +140,19 @@ static int __init dynsec_init(void)
 
     pr_info("Loaded: %s\n", CB_APP_MODULE_NAME);
     print_config(&global_config);
+
+    lock_config();
     // struct copy the inital copy of the config data
     preserved_config = global_config;
+    unlock_config();
 
     return 0;
 }
 
 static void __exit dynsec_exit(void)
 {
-    DS_LOG(DS_INFO, "Exiting: %s",
-           CB_APP_MODULE_NAME);
+    pr_info("Exiting: %s\n", THIS_MODULE->name);
+
 
     dynsec_chrdev_shutdown();
 
@@ -168,4 +170,5 @@ static void __exit dynsec_exit(void)
 module_init(dynsec_init);
 module_exit(dynsec_exit);
 
+MODULE_AUTHOR("VMware, Inc.");
 MODULE_LICENSE("GPL");

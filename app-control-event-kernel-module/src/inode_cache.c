@@ -8,6 +8,7 @@
 #include <linux/fs.h>
 #include <linux/vmalloc.h>
 #include <linux/random.h>
+#include <linux/sched.h>
 #include "inode_cache.h"
 #include "dynsec.h"
 
@@ -37,8 +38,8 @@ struct inode_cache {
     u32 seed;
 };
 
-#define INODE_MAX_BKT_SZ 10
-#define INODE_BUCKET_BITS 7
+#define INODE_MAX_BKT_SZ 8
+#define INODE_BUCKET_BITS 14
 #define INODE_BUCKETS BIT(INODE_BUCKET_BITS)
 
 static struct inode_cache *inode_cache = NULL;
@@ -66,14 +67,18 @@ static void inode_cache_free_entries(void)
     struct inode_entry *entry, *tmp;
     int i;
     unsigned long flags;
+    u32 total_entries = 0;
+    u32 bkts_used = 0;
 
     if (!inode_cache || !inode_cache->bkt) {
         return;
     }
 
     for (i = 0; i < INODE_BUCKETS; i++) {
-        // spin_lock_irqsave(&inode_cache->bkt[i].lock, flags);
+        u32 size = 0;
+
         flags = lock_bucket(&inode_cache->bkt[i], flags);
+        size = inode_cache->bkt[i].size;
         list_for_each_entry_safe (entry, tmp, &inode_cache->bkt[i].list,
                       list) {
             list_del_init(&entry->list);
@@ -81,7 +86,15 @@ static void inode_cache_free_entries(void)
         }
         inode_cache->bkt[i].size = 0;
         unlock_bucket(&inode_cache->bkt[i], flags);
-        // spin_unlock_irqrestore(&inode_cache->bkt[i].lock, flags);
+
+        total_entries += size;
+        if (size) {
+            bkts_used += 1;
+        }
+    }
+    if (total_entries) {
+        pr_info("inode hashtbl: total entries:%u bkts_used:%u\n",
+                total_entries, bkts_used);
     }
 }
 
@@ -114,6 +127,7 @@ int inode_cache_register(void)
         spin_lock_init(&inode_cache->bkt[i].lock);
         inode_cache->bkt[i].size = 0;
         INIT_LIST_HEAD(&inode_cache->bkt[i].list);
+        cond_resched();
     }
 
     get_random_bytes(&inode_cache->seed, sizeof(inode_cache->seed));
@@ -221,9 +235,9 @@ int inode_cache_lookup(unsigned long inode_addr, u64 *hits,
     entry = __lookup_entry_safe(hash, &key, &bkt->list);
     if (entry) {
         ret = 0;
-        // if (!is_entry_disabled(entry)) {
-        //     entry->hits += 1;
-        // }
+        if (!is_entry_disabled(entry)) {
+            entry->hits += 1;
+        }
         if (hits) {
             *hits = entry->hits;
         }
