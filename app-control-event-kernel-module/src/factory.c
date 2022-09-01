@@ -442,11 +442,13 @@ void prepare_dynsec_event(struct dynsec_event *dynsec_event, gfp_t mode)
         break;
 
     case DYNSEC_EVENT_TYPE_OPEN:
+        // TODO: If OPEN for EXEC propagate label options
     case DYNSEC_EVENT_TYPE_CLOSE:
         prepare_hdr_data(dynsec_event_to_file(dynsec_event));
         break;
 
     case DYNSEC_EVENT_TYPE_MMAP:
+        // TODO: If MMAP for EXEC propagate label options
         prepare_hdr_data(dynsec_event_to_mmap(dynsec_event));
         break;
 
@@ -459,6 +461,7 @@ void prepare_dynsec_event(struct dynsec_event *dynsec_event, gfp_t mode)
         break;
 
     case DYNSEC_EVENT_TYPE_CLONE:
+        // TODO: propagate labeling options
     case DYNSEC_EVENT_TYPE_EXIT:
         prepare_hdr_data(dynsec_event_to_task(dynsec_event));
         break;
@@ -795,7 +798,7 @@ static ssize_t copy_exec_event(const struct dynsec_exec_event *exec,
         exec->kmsg.msg.file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     exec->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -808,7 +811,7 @@ static ssize_t copy_exec_event(const struct dynsec_exec_event *exec,
     }
 
     if (exec->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 exec->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -842,7 +845,7 @@ static ssize_t copy_unlink_event(const struct dynsec_unlink_event *unlink,
         unlink->kmsg.msg.file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     unlink->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -856,7 +859,7 @@ static ssize_t copy_unlink_event(const struct dynsec_unlink_event *unlink,
     }
 
     if (unlink->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 unlink->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -891,7 +894,7 @@ static ssize_t copy_rename_event(const struct dynsec_rename_event *rename,
         rename->kmsg.msg.old_file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     rename->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -909,7 +912,7 @@ static ssize_t copy_rename_event(const struct dynsec_rename_event *rename,
         rename->kmsg.msg.new_file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     rename->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -923,7 +926,7 @@ static ssize_t copy_rename_event(const struct dynsec_rename_event *rename,
     }
 
     if (rename->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 rename->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -957,7 +960,7 @@ static ssize_t copy_create_event(const struct dynsec_create_event *create,
         create->kmsg.msg.file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     create->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -971,7 +974,7 @@ static ssize_t copy_create_event(const struct dynsec_create_event *create,
     }
 
     if (create->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 create->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -1006,7 +1009,7 @@ static ssize_t copy_setattr_event(const struct dynsec_setattr_event *setattr,
         setattr->kmsg.msg.file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     setattr->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -1020,7 +1023,7 @@ static ssize_t copy_setattr_event(const struct dynsec_setattr_event *setattr,
     }
 
     if (setattr->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 setattr->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -1056,7 +1059,7 @@ static ssize_t copy_file_event(const struct dynsec_file_event *file,
         file->kmsg.msg.file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     file->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -1070,7 +1073,7 @@ static ssize_t copy_file_event(const struct dynsec_file_event *file,
     }
 
     if (file->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 file->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -1104,7 +1107,7 @@ static ssize_t copy_mmap_event(const struct dynsec_mmap_event *mmap,
         mmap->kmsg.msg.file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     mmap->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -1118,7 +1121,7 @@ static ssize_t copy_mmap_event(const struct dynsec_mmap_event *mmap,
     }
 
     if (mmap->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 mmap->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -1152,7 +1155,7 @@ static ssize_t copy_link_event(const struct dynsec_link_event *link,
         link->kmsg.msg.old_file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     link->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -1170,7 +1173,7 @@ static ssize_t copy_link_event(const struct dynsec_link_event *link,
         link->kmsg.msg.new_file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     link->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -1184,7 +1187,7 @@ static ssize_t copy_link_event(const struct dynsec_link_event *link,
     }
 
     if (link->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 link->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -1218,7 +1221,7 @@ static ssize_t copy_symlink_event(const struct dynsec_symlink_event *symlink,
         symlink->kmsg.msg.file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     symlink->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -1236,7 +1239,7 @@ static ssize_t copy_symlink_event(const struct dynsec_symlink_event *symlink,
         symlink->kmsg.msg.target.size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     symlink->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -1250,7 +1253,7 @@ static ssize_t copy_symlink_event(const struct dynsec_symlink_event *symlink,
     }
 
     if (symlink->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 symlink->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -1282,7 +1285,7 @@ static ssize_t copy_task_event(const struct dynsec_task_event *task,
     if (task->exec_path && task->kmsg.msg.exec_file.path_offset &&
         task->kmsg.msg.exec_file.path_size) {
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     task->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -1297,7 +1300,7 @@ static ssize_t copy_task_event(const struct dynsec_task_event *task,
     }
 
     if (task->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 task->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -1327,7 +1330,7 @@ static ssize_t copy_ptrace_event(const struct dynsec_ptrace_event *ptrace,
     }
 
     if (ptrace->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 ptrace->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -1357,7 +1360,7 @@ static ssize_t copy_signal_event(const struct dynsec_signal_event *signal,
     }
 
     if (signal->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 signal->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -1391,7 +1394,7 @@ static ssize_t copy_task_dump_event(const struct dynsec_task_dump_event *task_du
         task_dump->kmsg.msg.exec_file.path_size) {
 
         if (buf + copied != p) {
-            pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+            pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                     task_dump->kmsg.hdr.payload, copied);
             goto out_fail;
         }
@@ -1406,7 +1409,7 @@ static ssize_t copy_task_dump_event(const struct dynsec_task_dump_event *task_du
     }
 
     if (task_dump->kmsg.hdr.payload != copied) {
-        pr_info("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
+        pr_err("%s:%d payload:%u != copied:%d\n", __func__, __LINE__,
                 task_dump->kmsg.hdr.payload, copied);
         goto out_fail;
     }
@@ -1540,7 +1543,7 @@ ssize_t copy_dynsec_event_to_user(const struct dynsec_event *dynsec_event,
         break;
     }
 
-    pr_info("%s: Invalid Event Type\n", __func__);
+    pr_err("%s: Invalid Event Type\n", __func__);
     return -EINVAL;
 }
 
@@ -2256,6 +2259,7 @@ bool fill_in_clone(struct dynsec_event *dynsec_event,
     } else {
         __fill_in_task_ctx(child, true, &clone->kmsg.msg.task);
     }
+    clone->kmsg.hdr.tid = clone->kmsg.msg.task.tid;
 
     get_task_struct((struct task_struct *)child);
     clone->exec_path = fill_in_task_exe((struct task_struct *)child,
@@ -2579,13 +2583,12 @@ bool fill_in_preaction_rename(struct dynsec_event *dynsec_event,
                                              &rename->kmsg.msg.new_file,
                                              GFP_KERNEL);
         path_put(&newpath);
-    } else {
+    } else if (ret == -ENOENT) {
         rename->new_path = build_preaction_path(newdfd, newname, 0,
                                                 &rename->kmsg.msg.new_file);
-        // Allow this bad intent to
+        // Allow this bad intent to be sent still
         if (IS_ERR(rename->new_path)) {
             rename->new_path = NULL;
-            return false;
         }
     }
     if (rename->new_path && rename->kmsg.msg.new_file.path_size) {
@@ -2642,6 +2645,7 @@ bool fill_in_preaction_symlink(struct dynsec_event *dynsec_event,
         symlink->path = NULL;
         return false;
     }
+
     symlink->kmsg.msg.file.umode |= S_IFLNK;
 
     if (symlink->path && symlink->kmsg.msg.file.path_size) {

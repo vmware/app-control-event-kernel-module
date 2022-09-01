@@ -70,13 +70,18 @@ static void task_cache_free_entries(void)
     struct task_entry *entry, *tmp;
     int i;
     unsigned long flags;
+    u32 total_entries = 0;
+    u32 bkts_used = 0;
 
     if (!task_cache || !task_cache->bkt) {
         return;
     }
 
     for (i = 0; i < TASK_BUCKETS; i++) {
+        u32 size = 0;
+
         spin_lock_irqsave(&task_cache->bkt[i].lock, flags);
+        size = task_cache->bkt[i].size;
         list_for_each_entry_safe (entry, tmp, &task_cache->bkt[i].list,
                       list) {
             list_del_init(&entry->list);
@@ -84,7 +89,15 @@ static void task_cache_free_entries(void)
         }
         task_cache->bkt[i].size = 0;
         spin_unlock_irqrestore(&task_cache->bkt[i].lock, flags);
+
+        total_entries += size;
+        if (size) {
+            bkts_used += 1;
+        }
     }
+
+    pr_debug("task hashtbl: entries:%u bkts used:%u\n",
+            total_entries, bkts_used);
 }
 
 int task_cache_register(void)
@@ -116,6 +129,7 @@ int task_cache_register(void)
         spin_lock_init(&task_cache->bkt[i].lock);
         task_cache->bkt[i].size = 0;
         INIT_LIST_HEAD(&task_cache->bkt[i].list);
+        cond_resched();
     }
 
     get_random_bytes(&task_cache->seed, sizeof(task_cache->seed));
@@ -180,7 +194,7 @@ static struct task_entry *__lookup_entry_safe(u32 hash, struct task_key *key,
 }
 
 #define task_observed_stall_event(task_entry) \
-    (task_entry->last_stall.event_type < DYNSEC_EVENT_TYPE_MAX)
+    (task_entry->last_stall.event_type < DYNSEC_EVENT_TYPE_TASK_DUMP)
 
 #define event_cache_enabled(mask) \
     (!!(mask & (DYNSEC_CACHE_ENABLE|DYNSEC_CACHE_ENABLE_EXCL|DYNSEC_CACHE_ENABLE_STRICT)))
@@ -279,8 +293,8 @@ int task_cache_set_last_event(pid_t tid,
     }
 
     if (event->event_type < 0 ||
-        event->event_type >= DYNSEC_EVENT_TYPE_MAX) {
-        return -EINVAL;
+        event->event_type >= DYNSEC_EVENT_TYPE_TASK_DUMP) {
+        return -ERANGE;
     }
 
     key.tid = tid;
