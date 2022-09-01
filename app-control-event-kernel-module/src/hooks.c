@@ -103,6 +103,10 @@ int dynsec_inode_unlink(struct inode *dir, struct dentry *dentry)
     if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+    // check if client is interested in this file system
+    if (!__is_client_concerned_filesystem(dentry->d_sb)) {
+        goto out;
+    }
 
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
@@ -172,6 +176,10 @@ int dynsec_inode_rmdir(struct inode *dir, struct dentry *dentry)
     if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+    // check if client is interested in this file system
+    if (!__is_client_concerned_filesystem(dentry->d_sb)) {
+        goto out;
+    }
 
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
@@ -235,6 +243,10 @@ int dynsec_inode_rename(struct inode *old_dir, struct dentry *old_dentry,
 #endif
 
     if (!hooks_enabled(stall_tbl)) {
+        goto out;
+    }
+    // check if client is interested in this file system
+    if (!__is_client_concerned_filesystem(old_dentry->d_sb)) {
         goto out;
     }
 
@@ -363,6 +375,10 @@ int dynsec_inode_setattr(struct dentry *dentry, struct iattr *attr)
     if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+    // check if client is interested in this file system
+    if (!__is_client_concerned_filesystem(dentry->d_sb)) {
+        goto out;
+    }
 
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
@@ -416,6 +432,10 @@ int dynsec_inode_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 #endif
 
     if (!hooks_enabled(stall_tbl)) {
+        goto out;
+    }
+    // check if client is interested in this file system
+    if (!__is_client_concerned_filesystem(dentry->d_sb)) {
         goto out;
     }
 
@@ -473,6 +493,10 @@ int dynsec_inode_create(struct inode *dir, struct dentry *dentry,
     if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+    // check if client is interested in this file system
+    if (!__is_client_concerned_filesystem(dentry->d_sb)) {
+        goto out;
+    }
 
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
@@ -523,6 +547,10 @@ int dynsec_inode_link(struct dentry *old_dentry, struct inode *dir,
     if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+    // check if client is interested in this file system
+    if (!__is_client_concerned_filesystem(old_dentry->d_sb)) {
+        goto out;
+    }
 
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
@@ -571,6 +599,10 @@ int dynsec_inode_symlink(struct inode *dir, struct dentry *dentry,
 #endif
 
     if (!hooks_enabled(stall_tbl)) {
+        goto out;
+    }
+    // check if client is interested in this file system
+    if (!__is_client_concerned_filesystem(dentry->d_sb)) {
         goto out;
     }
 
@@ -657,6 +689,12 @@ static inline bool may_report_file(const struct file *file)
 
         if (file->f_path.dentry && file->f_path.dentry->d_sb) {
             if (__is_special_filesystem(file->f_path.dentry->d_sb)) {
+                return false;
+            }
+
+            // check if connected client is interested in this
+            // file system type
+            if (!__is_client_concerned_filesystem(file->f_path.dentry->d_sb)) {
                 return false;
             }
         }
@@ -1145,6 +1183,15 @@ int dynsec_file_mmap(struct file *file, unsigned long reqprot, unsigned long pro
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
         report_flags &= ~(DYNSEC_REPORT_STALL);
+    }
+
+    // file system mask check...keeping simple
+    // no checks for report_flags for HI_PRI or STALL
+    if (file->f_path.dentry) {
+        // check if client is interested in this file system
+        if (!__is_client_concerned_filesystem(file->f_path.dentry->d_sb)) {
+            goto out;
+        }
     }
 
     // We may to filter out mmaps events here
