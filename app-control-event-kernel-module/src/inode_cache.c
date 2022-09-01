@@ -9,6 +9,8 @@
 #include <linux/vmalloc.h>
 #include <linux/random.h>
 #include <linux/sched.h>
+#include <linux/seq_file.h>
+
 #include "inode_cache.h"
 #include "dynsec.h"
 

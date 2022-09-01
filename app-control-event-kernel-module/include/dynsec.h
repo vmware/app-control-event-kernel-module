@@ -4,6 +4,14 @@
 #pragma once
 #include <linux/ioctl.h>
 
+#ifndef PATH_MAX
+#ifdef __KERNEL__
+#include <linux/limits.h>
+#else
+#include <limits.h>
+#endif
+#endif /* ! PATH_MAX */
+
 #define DYNSEC_HOOK_TYPE_EXEC       0x00000001
 #define DYNSEC_HOOK_TYPE_RENAME     0x00000002
 #define DYNSEC_HOOK_TYPE_UNLINK     0x00000004
@@ -36,8 +44,10 @@
 #define DYNSEC_REPORT_AUDIT         0x0004
 // Event did not stall due to a cache option
 #define DYNSEC_REPORT_CACHED        0x0008
-// Unused
-#define DYNSEC_REPORT_TP            0x0010
+#define DYNSEC_REPORT_UNSTALL       DYNSEC_REPORT_CACHED
+// Event Denied. Decision made within kernel module.
+// If POST flag is set, the operation was denied somewhere.
+#define DYNSEC_REPORT_DENIED        0x0010
 // Event came from a the client
 #define DYNSEC_REPORT_SELF          0x0020
 // Used to determine importance on queue and wake_up usage
@@ -52,10 +62,19 @@
 #define DYNSEC_REPORT_LAST_TASK     0x0400
 // File event was not stalled due to the read only cache.
 #define DYNSEC_REPORT_INODE_CACHED  0x0800
+// When set and sent to userspace. The event can be discarded.
+// Also helpful for debugging what would be ignored.
+#define DYNSEC_REPORT_IGNORE        0x1000
+// Clue for POST events that an operation failed.
+#define DYNSEC_REPORT_FAIL          0x2000
 
 // Response Type For Stalls
-#define DYNSEC_RESPONSE_ALLOW 0x00000000
-#define DYNSEC_RESPONSE_EPERM 0x00000001
+#define DYNSEC_RESPONSE_ALLOW       0x00000000
+#define DYNSEC_RESPONSE_EPERM       0x00000001
+#define DYNSEC_RESPONSE_CONTINUE    0x00010000
+//
+// Task and Inode Event Labeling (Cache) Options
+//
 
 // Keep Event Cache Enabled Until Explicitly Disabled
 #define DYNSEC_CACHE_ENABLE           0x00000001
@@ -70,7 +89,9 @@
 // Clear All Caching For An Event Type
 #define DYNSEC_CACHE_CLEAR_ON_EVENT   0x00000040
 // Unused - Instead of not stalling, don't send the event
-#define DYNSEC_CACHE_IGNORE           0x00010000
+#define DYNSEC_CACHE_IGNORE           0x00000100
+#define DYNSEC_CACHE_INHERIT          0x00001000
+#define DYNSEC_CACHE_INHERIT_RECURSE  0x00002000
 
 // For Setattr Event
 #define DYNSEC_SETATTR_MODE     (1 << 0)
@@ -80,6 +101,8 @@
 #define DYNSEC_SETATTR_FILE     (1 << 13)
 #define DYNSEC_SETATTR_OPEN     (1 << 15)
 
+// Currently all structs exposed to userspace are packed.
+// Packed structs have their pros and cons, take them into consideration.
 #pragma pack(push, 1)
 // Event Message Types
 enum dynsec_event_type {
@@ -125,6 +148,11 @@ struct dynsec_response {
     int32_t response;
     uint32_t cache_flags;
     uint32_t inode_cache_flags;
+    uint32_t task_label_flags;
+
+    // allow this to override global continue value
+    // when continuation response set.
+    uint32_t overrided_stall_timeout;
 };
 
 // Eventually have dynsec_task_ctx contain this
@@ -161,9 +189,27 @@ struct dynsec_task_ctx {
     char     comm[DYNSEC_TASK_COMM_LEN];
 };
 
+//
+// NOTE:
+//  Offset fields describe the location or the number of bytes
+//  the blob or string is from the beginning of an event's header.
+//
+// EXAMPLE:
+//
+//      if (hdr->event_type == DYNSEC_EVENT_TYPE_EXEC)
+//          p = get_exec_event_path((struct dynsec_exec_umsg *)hdr);
+//      ...
+//
+//      char *get_exec_event_path(struct dynsec_exec_umsg *exec) {
+//          if (exec && exec->msg.path_offset)
+//              return (char *)exec + exec->msg.path_offset;
+//          return NULL;
+//      }
+//
+
 struct dynsec_blob {
-    uint16_t offset;
-    uint16_t size;
+    uint16_t offset;    // Offset of blob from event header.
+    uint16_t size;      // Size of blob. Not NUL '\0' terminated
 };
 
 struct dynsec_file {
@@ -180,7 +226,8 @@ struct dynsec_file {
 #define DYNSEC_FILE_ATTR_PATH_DENTRY    0x0020
 // Hints path needs normalization and is raw intent
 #define DYNSEC_FILE_ATTR_PATH_RAW       0x0040
-#define DYNSEC_FILE_ATTR_PATH_RESERVED  0x0080
+// Tell us some part of the path may be truncated
+#define DYNSEC_FILE_ATTR_PATH_TRUNC     0x0080
 // Hints that umode will likely inherit parent DAC perms
 #define DYNSEC_FILE_ATTR_POSIX_ACL      0x0100
 #define DYNSEC_FILE_ATTR_DELETED        0x0200
@@ -203,8 +250,8 @@ struct dynsec_file {
     uint32_t parent_uid;
     uint32_t parent_gid;
     uint16_t parent_umode;
-    uint16_t path_offset;
-    uint16_t path_size;
+    uint16_t path_offset;   // offset of path from beginning of event header
+    uint16_t path_size;     // includes the terminating NUL '\0'
 };
 
 // Core Exec Context
@@ -387,6 +434,16 @@ struct dynsec_task_dump_umsg {
 #define DYNSEC_IOC_DELETE_DEVICE   _IO(DYNSEC_IOC_BASE, DYNSEC_IOC_OFFSET + 7)
 // Change the default stall timeout by milliseconds
 #define DYNSEC_IO_STALL_TIMEOUT_MS _IO(DYNSEC_IOC_BASE, DYNSEC_IOC_OFFSET + 8)
+// Set options for sending files on open events
+#define DYNSEC_IOC_SEND_FILE       _IO(DYNSEC_IOC_BASE, DYNSEC_IOC_OFFSET + 9)
+// Operation to request
+#define DYNSEC_IOC_PROTECT         _IO(DYNSEC_IOC_BASE, DYNSEC_IOC_OFFSET + 10)
+// Set ignore events to disable, enable or debug enable
+#define DYNSEC_IOC_IGNORE_MODE     _IO(DYNSEC_IOC_BASE, DYNSEC_IOC_OFFSET + 11)
+// Explicitly set a task's label
+#define DYNSEC_IOC_LABEL_TASK      _IO(DYNSEC_IOC_BASE, DYNSEC_IOC_OFFSET + 12)
+#define DYNSEC_IOC_STALL_OPTS      _IO(DYNSEC_IOC_BASE, DYNSEC_IOC_OFFSET + 13)
+
 // May want a request to print out what kernel objects
 // that are blocking a clean rmmod.
 
@@ -398,12 +455,12 @@ struct dynsec_task_dump_hdr {
     // size - payload of userspace buffer and itself. And
     //      assumes offset to userspace buffer is after header.
     uint16_t size;
-    pid_t pid;
 
 // Optionally request the next matching thread or process
 #define DUMP_NEXT_THREAD 0x0001
 #define DUMP_NEXT_TGID   0x0002
     uint16_t opts;
+    pid_t pid;
 };
 
 // Base Payload for DYNSEC_IOC_TASK_DUMP
@@ -427,6 +484,54 @@ struct dynsec_task_dump_all {
     struct dynsec_task_dump_hdr hdr;
 };
 
+struct dynsec_match {
+#define DYNSEC_MATCHING_PATH_EQ             0x00000001
+#define DYNSEC_MATCHING_PATH_CONTAINS       0x00000002
+#define DYNSEC_MATCHING_PATH_STARTS_WITH    0x00000004
+#define DYNSEC_MATCHING_PATH_ENDS_WITH      0x00000008
+#define DYNSEC_MATCHING_MAY_SIGNAL_CLIENT   0x00010000
+    uint64_t match_flags;
+
+    union {
+        char path[PATH_MAX];
+    };
+};
+
+struct dynsec_protect_ioc_hdr {
+    uint16_t size;
+#define DYNSEC_PROTECT_DISABLE  0x0001
+// CLEAR only valid if DISABLE bit set or protect mode already disabled.
+#define DYNSEC_PROTECT_CLEAR    0x0002
+// When ADD set, size must be:
+//     sizeof(struct dynsec_protect_ioc_hdr) + sizeof(struct dynsec_match).
+#define DYNSEC_PROTECT_ADD      0x0004
+#define DYNSEC_PROTECT_ENABLE   0x0008
+    uint16_t protect_flags;
+};
+
+struct dynsec_label_task_hdr {
+    pid_t tid;
+    pid_t pid;
+    uint32_t task_label_flags;
+};
+
+// Multiplex stall and stall timeout options
+struct dynsec_stall_ioc_hdr {
+#define DYNSEC_STALL_MODE_SET             0x00000001
+#define DYNSEC_STALL_DEFAULT_TIMEOUT      0x00000002
+#define DYNSEC_STALL_CONTINUE_TIMEOUT     0x00000004
+#define DYNSEC_STALL_DEFAULT_DENY         0x00000008
+    uint32_t flags;
+    uint32_t stall_mode;
+    uint32_t stall_timeout;
+    uint32_t stall_timeout_continue;
+    uint32_t stall_timeout_deny;
+};
+
+// 1 minute time, 5 sec timeout...
+// 60/5 = 12 counter
+#define DYNSEC_STALL_TIMEOUT_CTR_LIMIT      12
+
 // Eventually will contain mix of global
 // and per-client settings and state of kmod.
 struct dynsec_config {
@@ -434,8 +539,12 @@ struct dynsec_config {
     uint32_t bypass_mode;
     // Unsets STALL in report flags when disabled aka ZERO
     uint32_t stall_mode;
-    // Tells us how long we can stall
+    // Tells us how long we may initially stall in milliseconds
     uint32_t stall_timeout;
+    // Tells us how long we may continue stalling in milliseconds
+    uint32_t stall_timeout_continue;
+    // Tells if we are in default deny for stall timeouts.
+    uint32_t stall_timeout_deny;
 
     // Lazy notifer may not always notify when a new event is available
     uint32_t lazy_notifier;
@@ -444,10 +553,20 @@ struct dynsec_config {
     // Max events before enforcing a wake_up
     uint32_t notify_threshold;
 
+    // Option to send files to client reading events.
+    uint32_t send_files;
+
+    // Protect a connected client and secondary applications.
+    uint32_t protect_mode;
+
+    // Allow kernel level ignoring.
+    uint32_t ignore_mode;
+
     // Available hooks. Currently Immutable.
     uint64_t lsm_hooks;
     uint64_t process_hooks;
     uint64_t preaction_hooks;
+
 };
 
 #pragma pack(pop)

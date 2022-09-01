@@ -28,6 +28,7 @@
 #include "path_utils.h"
 #include "task_cache.h"
 #include "task_utils.h"
+#include "fs_utils.h"
 #include "config.h"
 
 static atomic64_t req_id = ATOMIC64_INIT(0);
@@ -294,6 +295,10 @@ struct dynsec_event *alloc_dynsec_event(enum dynsec_event_type event_type,
         report_flags &= ~(DYNSEC_REPORT_STALL);
     }
 
+    if (bypass_mode_enabled()) {
+        return NULL;
+    }
+
     switch (event_type)
     {
     case DYNSEC_EVENT_TYPE_EXEC:
@@ -348,6 +353,7 @@ struct dynsec_event *alloc_dynsec_event(enum dynsec_event_type event_type,
 }
 
 // Set the last event for task_cache for PreActions
+// TODO: Call this on failure or deny flows for LSM hooks?
 void prepare_non_report_event(enum dynsec_event_type event_type, gfp_t mode)
 {
     struct event_track dummy_track  = {
@@ -356,24 +362,52 @@ void prepare_non_report_event(enum dynsec_event_type event_type, gfp_t mode)
         .report_flags = 0,
         .req_id = 0,
     };
+    bool is_thread;
 
-    if (event_type < DYNSEC_EVENT_TYPE_TASK_DUMP) {
-        (void)task_cache_set_last_event(current->pid, &dummy_track, NULL, mode);
+    if (event_type >= DYNSEC_EVENT_TYPE_TASK_DUMP) {
+        return;
+    }
+
+    if (current->pid == current->tgid) {
+        is_thread = false;
+        (void)task_cache_set_last_event(current->pid,
+                                        task_parent_tgid(current),
+                                        is_thread, &dummy_track, NULL, mode);
+    } else {
+        is_thread = true;
+        (void)task_cache_set_last_event(current->pid, current->tgid,
+                                        is_thread, &dummy_track, NULL, mode);
     }
 }
 
+// TODO: Migrate this away from requiring an allocated dynsec_event object.
+// This would be to allow short circuiting events on ignore faster.
 void prepare_dynsec_event(struct dynsec_event *dynsec_event, gfp_t mode)
 {
     struct event_track event;
     struct event_track prev_event;
+    int err;
+    bool is_thread;
 
     if (!dynsec_event) {
         return;
     }
 
     // Disable stalling auto-magically
-    if (!stall_mode_enabled()) {
+    if ((dynsec_event->report_flags & DYNSEC_REPORT_STALL) && !stall_mode_enabled()) {
         dynsec_event->report_flags &= ~(DYNSEC_REPORT_STALL);
+        goto skip_task_cache;
+    }
+
+    // Find the last event. If it's a PreAction aka DYNSEC_REPORT_INTENT
+    // and it was meant to be reportable then adjust req_id or tell us
+    if (dynsec_event->event_type >= DYNSEC_EVENT_TYPE_TASK_DUMP) {
+        goto skip_task_cache;
+    }
+
+    // // Do not set last event if we're already dead
+    if (!current->nsproxy) {
+        goto skip_task_cache;
     }
 
     event.track_flags = (TRACK_EVENT_REQ_ID_VALID | TRACK_EVENT_REPORTABLE);
@@ -382,31 +416,32 @@ void prepare_dynsec_event(struct dynsec_event *dynsec_event, gfp_t mode)
     event.event_type = dynsec_event->event_type;
     memset(&prev_event, 0, sizeof(prev_event));
 
-    // Find the last event. If it's an PreAction aka DYNSEC_REPORT_INTENT
-    // and it was meant to be reportable then adjust req_id or tell us
-    if (dynsec_event->event_type >= DYNSEC_EVENT_TYPE_HEALTH) {
-        return;
+    if (current->pid == current->tgid) {
+        is_thread = false;
+        err = task_cache_set_last_event(current->pid,
+                                        task_parent_tgid(current),
+                                        is_thread, &event, &prev_event, mode);
+    } else {
+        is_thread = true;
+        err = task_cache_set_last_event(current->pid, current->tgid, is_thread,
+                                        &event, &prev_event, mode);
     }
 
-    if (event.report_flags & DYNSEC_REPORT_INTENT) {
-        (void)task_cache_set_last_event(dynsec_event->tid, &event,
-                                        NULL, mode);
-    } else {
-        int error = task_cache_set_last_event(dynsec_event->tid, &event,
-                                              &prev_event, mode);
-        // Copy over modified report flags due to cache opts
-        if (!error) {
+    if (!err || err == -ENOENT) {
+        // Tell us what our new report flags are
+        if (event.track_flags & TRACK_EVENT_REPORT_FLAGS_CHG) {
             dynsec_event->report_flags = event.report_flags;
         }
 
-        if (!error && (prev_event.report_flags & DYNSEC_REPORT_INTENT) &&
-                (prev_event.track_flags & TRACK_EVENT_REPORTABLE) &&
+        if ((prev_event.report_flags & DYNSEC_REPORT_INTENT) &&
+            !(event.report_flags & DYNSEC_REPORT_INTENT) &&
                 prev_event.event_type == event.event_type) {
-            dynsec_event->intent_req_id = prev_event.req_id;
-            dynsec_event->report_flags |= DYNSEC_REPORT_INTENT_FOUND;
+             dynsec_event->intent_req_id = prev_event.req_id;
+             dynsec_event->report_flags |= DYNSEC_REPORT_INTENT_FOUND;
         }
     }
 
+skip_task_cache:
     // Set Queueing Priority When Not High Priority
     if (lazy_notifier_enabled()) {
         if (!(dynsec_event->report_flags & (DYNSEC_REPORT_STALL|DYNSEC_REPORT_HI_PRI))) {
@@ -420,6 +455,7 @@ void prepare_dynsec_event(struct dynsec_event *dynsec_event, gfp_t mode)
     switch (dynsec_event->event_type)
     {
     case DYNSEC_EVENT_TYPE_EXEC:
+        // TODO: propagate labeling options
         prepare_hdr_data(dynsec_event_to_exec(dynsec_event));
         break;
 
@@ -557,6 +593,11 @@ void free_dynsec_event(struct dynsec_event *dynsec_event)
             struct dynsec_file_event *file =
                     dynsec_event_to_file(dynsec_event);
 
+            if (file->open_path.mnt || file->open_path.dentry) {
+                path_put(&file->open_path);
+                file->open_path.mnt = NULL;
+                file->open_path.dentry = NULL;
+            }
             kfree(file->path);
             file->path = NULL;
             kfree(file);
@@ -1034,15 +1075,69 @@ out_fail:
     return -EFAULT;
 }
 
+#define OPEN_FILE_MASK (\
+    O_RDONLY        | \
+    O_LARGEFILE     | \
+    O_CLOEXEC       | \
+    O_NOATIME       | \
+    O_SYNC          | \
+    O_NONBLOCK        \
+)
+
+static int prep_send_new_fd(struct dynsec_file_event *file,
+                            struct file **filep)
+{
+    struct path path;
+    struct file *new_file = NULL;
+    int fd = -ENOENT;
+
+    // struct copy
+    path = file->open_path;
+
+    if (path.mnt || path.dentry) {
+        if (unlikely(!send_open_file_enabled())) {
+            return -EINVAL;
+        }
+
+        fd = get_unused_fd_flags(OPEN_FILE_MASK);
+
+        if (fd < 0) {
+            return fd;
+        }
+        // Alternatively we could dentry_open in the same cred
+        // context where the open originates, but would make
+        // the event queue overhead for OPEN events higher.
+#ifdef FMODE_NONOTIFY
+        new_file = dentry_open(&path, OPEN_FILE_MASK | FMODE_NONOTIFY,
+                               current_cred());
+#else
+        new_file = dentry_open(&path, OPEN_FILE_MASK, current_cred());
+#endif
+        if (IS_ERR(new_file)) {
+            put_unused_fd(fd);
+            return PTR_ERR(new_file);;
+        }
+        *filep = new_file;
+    }
+
+    return fd;
+}
+
 static ssize_t copy_file_event(const struct dynsec_file_event *file,
                                  char *__user buf, size_t count)
 {
     int copied = 0;
     char *__user p = buf;
+    int fd = -1;
+    struct file *new_file = NULL;
 
     if (count < file->kmsg.hdr.payload) {
         return -EINVAL;
     }
+
+    // Propagate file descriptor or errno.
+    fd = prep_send_new_fd((struct dynsec_file_event *)file, &new_file);
+    ((struct dynsec_file_event *)file)->kmsg.msg.fd = fd;
 
     // Copy header
     if (copy_to_user(p, &file->kmsg, sizeof(file->kmsg))) {
@@ -1051,8 +1146,6 @@ static ssize_t copy_file_event(const struct dynsec_file_event *file,
         copied += sizeof(file->kmsg);
         p += sizeof(file->kmsg);
     }
-
-    // TODO: Install fd If Desirable Feature
 
     // Copy Path Being Created
     if (file->path && file->kmsg.msg.file.path_offset &&
@@ -1078,9 +1171,19 @@ static ssize_t copy_file_event(const struct dynsec_file_event *file,
         goto out_fail;
     }
 
+    // Actually send file descriptor to the task reading events
+    if (fd >= 0 && new_file) {
+        fd_install(fd, new_file);
+    }
+
     return copied;
 
 out_fail:
+    if (fd >= 0 && new_file) {
+        put_unused_fd(fd);
+        fput(new_file);
+    }
+
     return -EFAULT;
 }
 
@@ -1428,6 +1531,24 @@ ssize_t copy_dynsec_event_to_user(const struct dynsec_event *dynsec_event,
         return -EINVAL;
     }
 
+    // For now POST events will just be the event header
+    if (dynsec_event->report_flags & DYNSEC_REPORT_POST) {
+        struct dynsec_msg_hdr hdr;
+
+        memset(&hdr, 0, sizeof(hdr));
+        hdr.payload = sizeof(hdr);
+        hdr.report_flags = dynsec_event->report_flags;
+        hdr.tid = dynsec_event->tid;
+        hdr.req_id = dynsec_event->req_id;
+        hdr.intent_req_id = dynsec_event->intent_req_id;
+        hdr.event_type = dynsec_event->event_type;
+
+        if (copy_to_user(p, &hdr, sizeof(hdr))) {
+            return -EFAULT;
+        }
+        return sizeof(hdr);
+    }
+
     // Copy might be different per event type
     switch (dynsec_event->event_type)
     {
@@ -1580,11 +1701,21 @@ static void __fill_in_task_ctx(const struct task_struct *task,
     }
     task_ctx->tid = task->pid;
     task_ctx->pid = task->tgid;
-    if (check_parent && task->parent) {
-        task_ctx->ppid = task->parent->tgid;
-    }
-    if (check_parent && task->real_parent) {
-        task_ctx->real_parent_id = task->real_parent->tgid;
+
+    // Set parent info with rcu protections
+    if (check_parent) {
+        struct task_struct *parent;
+
+        rcu_read_lock();
+        parent = rcu_dereference(task->parent);
+        if (parent) {
+            task_ctx->ppid = parent->tgid;
+        }
+        parent = rcu_dereference(task->real_parent);
+        if (parent) {
+            task_ctx->real_parent_id = parent->tgid;
+        }
+        rcu_read_unlock();
     }
 
     // user DAC context
@@ -1749,8 +1880,8 @@ static void fill_in_parent_data(struct dynsec_file *dynsec_file,
     }
 }
 
-static void fill_in_preaction_data(struct dynsec_file *dynsec_file,
-                                   const struct path *parent_path)
+void fill_in_preaction_data(struct dynsec_file *dynsec_file,
+                            const struct path *parent_path)
 {
     if (dynsec_file && parent_path) {
         if (parent_path->dentry) {
@@ -2012,10 +2143,14 @@ bool fill_in_inode_create(struct dynsec_event *dynsec_event,
     if (!dir || !IS_POSIXACL(dir)) {
         create->kmsg.msg.file.umode = (uint16_t)(umode & ~current_umask());
     }
-    if (dynsec_event->event_type == DYNSEC_EVENT_TYPE_MKDIR) {
-        create->kmsg.msg.file.umode |= S_IFDIR;
-    } else {
-        create->kmsg.msg.file.umode |= S_IFREG;
+    create->kmsg.msg.file.umode |= (uint16_t)(umode & S_IFMT);
+
+    if (!(create->kmsg.msg.file.umode & S_IFMT)) {
+        if (dynsec_event->event_type == DYNSEC_EVENT_TYPE_MKDIR) {
+            create->kmsg.msg.file.umode |= S_IFDIR;
+        } else if (dynsec_event->event_type == DYNSEC_EVENT_TYPE_CREATE) {
+            create->kmsg.msg.file.umode |= S_IFREG;
+        }
     }
 
     create->path = dynsec_build_dentry(dentry,
@@ -2126,6 +2261,47 @@ bool fill_in_inode_symlink(struct dynsec_event *dynsec_event,
     return true;
 }
 
+static inline bool may_read_from_file(const struct file *file)
+{
+    const struct super_block *sb = NULL;
+    const struct inode *inode = NULL;
+
+    if (file && file->f_path.dentry) {
+        sb = file->f_path.dentry->d_sb;
+        inode = file->f_path.dentry->d_inode;
+    }
+
+    // Don't send empty files open for read only
+    if (inode && !inode->i_size &&
+        (file->f_flags & O_ACCMODE) == O_RDONLY) {
+        return false;
+    }
+
+    // Allow for reading during exec regardless of filesystem type
+    if (file->f_mode & FMODE_EXEC) {
+        return true;
+    }
+
+    if (!sb) {
+        return false;
+    }
+
+    if (__is_special_filesystem(sb)) {
+        return false;
+    }
+
+    // For performance reasons don't read from stacked file systems
+    // except for overlayfs.
+    if (__is_stacked_filesystem(sb)) {
+        if (__is_overlayfs(sb)) {
+            return true;
+        }
+        return false;
+    }
+
+    return true;
+}
+
 bool fill_in_file_open(struct dynsec_event *dynsec_event, struct file *file,
                        gfp_t mode)
 {
@@ -2148,6 +2324,14 @@ bool fill_in_file_open(struct dynsec_event *dynsec_event, struct file *file,
     if (open->path && open->kmsg.msg.file.path_size) {
         open->kmsg.msg.file.path_offset = open->kmsg.hdr.payload;
         open->kmsg.hdr.payload += open->kmsg.msg.file.path_size;
+    }
+    if (dynsec_event->inode_addr && send_open_file_enabled() &&
+        may_read_from_file(file)) {
+        open->open_path = file->f_path;
+        path_get(&open->open_path);
+    } else {
+        open->open_path.mnt = NULL;
+        open->open_path.dentry = NULL;
     }
 
     return true;
@@ -2314,203 +2498,6 @@ bool fill_in_task_kill(struct dynsec_event *dynsec_event,
     return true;
 }
 
-//#ifndef CONFIG_SECURITY_PATH
-static char *build_preaction_path(int dfd, const char __user *filename,
-                                  int lookup_flags, struct dynsec_file *file)
-{
-    char *filebuf = NULL;
-    char *input_buf = NULL;
-    char *last_component = NULL;
-    char *p = NULL;
-    char *last = NULL;
-    char *norm_path = NULL;
-    int total_len = 0;
-    int input_len = 0;
-    int last_len = 0;
-    int error = -EINVAL;
-    long max_input_len;
-    struct path parent_path;
-
-    lookup_flags |= LOOKUP_FOLLOW;
-
-    if (!filename || !file) {
-        return ERR_PTR(-EINVAL);
-    }
-    if (dfd < 0 && dfd != AT_FDCWD) {
-        return ERR_PTR(-EINVAL);
-    }
-
-    // A couple extra bytes to detect invalid component
-    last_component = kzalloc(NAME_MAX + 2, GFP_KERNEL);
-    if (!last_component) {
-        return ERR_PTR(-ENOMEM);
-    }
-    // Setup raw last component
-    last = last_component + NAME_MAX;
-    *last = '\0';
-
-    filebuf = kzalloc(PATH_MAX, GFP_KERNEL);
-    if (!filebuf) {
-        error = -ENOMEM;
-        goto out_err_free;
-    }
-    filebuf[0] = 0;
-    input_buf = filebuf;
-
-
-    if (dfd >= 0) {
-        char *bufp;
-        struct file *dfd_file = fget(dfd);
-
-        if (IS_ERR_OR_NULL(dfd_file)) {
-            goto out_err_free;
-        }
-        if (!dfd_file->f_path.dentry || !dfd_file->f_path.mnt) {
-            fput(dfd_file);
-            goto out_err_free;
-        }
-
-        // // Might as well check if dir
-        // if (!dfd_file->f_path.dentry || !d_is_dir(dfd_file->f_path.dentry)) {
-        //     error = -ENOTDIR;
-        //     fput(dfd_file);
-        //     goto out_err_free;
-        // }
-        if (!dfd_file->f_path.dentry ||
-            !dfd_file->f_path.dentry->d_inode ||
-            !S_ISDIR(dfd_file->f_path.dentry->d_inode->i_mode)) {
-            error = -ENOTDIR;
-            fput(dfd_file);
-            goto out_err_free;
-        }
-
-        bufp = dynsec_d_path(&dfd_file->f_path, filebuf, PATH_MAX);
-        fput(dfd_file);
-        dfd_file = NULL;
-
-        if (IS_ERR_OR_NULL(bufp) || !*bufp) {
-            error = -ENAMETOOLONG;
-            goto out_err_free;
-        }
-        total_len = strlen(bufp);
-        if (total_len >= PATH_MAX) {
-            error = -ENAMETOOLONG;
-            goto out_err_free;
-        }
-        memmove(filebuf, bufp, total_len);
-
-        // Setup for appending user string
-        filebuf[total_len] = '/';
-        total_len += 1;
-        input_buf = filebuf + total_len;
-    }
-
-    // TODO: Allocate own buffer for user filepath
-    max_input_len = PATH_MAX - total_len;
-    input_buf[max_input_len - 1] = 0; // aka filebuf[PATH_MAX - 1] = 0
-    input_len = strncpy_from_user(input_buf, filename, max_input_len);
-    if (input_len < 0) {
-        error = input_len;
-        goto out_err_free;
-    }
-    if (input_len == 0) {
-        goto out_err_free;
-    }
-    if (input_len == max_input_len &&
-        input_buf[max_input_len - 1] != 0) {
-        error = -ENAMETOOLONG;
-        goto out_err_free;
-    }
-    total_len += input_len;
-
-    // pr_info("%s:%d dfd:%d input_len:%d '%s'", __func__, __LINE__,
-    //         dfd, input_len, filebuf);
-
-
-    // Chomp trailing slashes
-    p = input_buf + input_len;
-    while (p >= input_buf && *p == '/') {
-        *p = '\0';
-        p--;
-        total_len--;
-    }
-
-    // copy component until we hit a barrier
-    while (p >= input_buf && last > last_component) {
-        if (*p == '/') {
-            break;
-        }
-        last--;
-        *last = *p;
-        last_len++;
-
-        *p = '\0';
-        p--;
-        total_len--;
-    }
-    if (last_len > NAME_MAX) {
-        error = -ENAMETOOLONG;
-        goto out_err_free;
-    }
-    if (!last_len) {
-        error = -EINVAL;
-        goto out_err_free;
-    }
-
-    // Normalize the filepath
-    error = kern_path(filebuf, lookup_flags, &parent_path);
-    if (error) {
-        goto out_err_free;
-    }
-
-    error = -ENAMETOOLONG;
-
-    fill_in_preaction_data(file, &parent_path);
-    norm_path = dynsec_build_path(&parent_path, file, GFP_KERNEL);
-    path_put(&parent_path);
-
-    // Append the last component to the normalized or raw input data
-    if (IS_ERR_OR_NULL(norm_path)) {
-        int raw_len = strlen(filebuf);
-
-        if (raw_len + 1 + last_len > PATH_MAX) {
-            error = -ENAMETOOLONG;
-            goto out_err_free;
-        }
-        filebuf[raw_len] = '/';
-        raw_len += 1;
-        strlcpy(filebuf + raw_len, last, last_len);
-        file->path_size = (uint16_t)strlen(filebuf) + 1;
-        file->attr_mask |= DYNSEC_FILE_ATTR_PATH_RAW;
-        kfree(last_component);
-        return filebuf;
-    } else {
-        int parent_len = strlen(norm_path);
-
-        // parent + '/' + last component
-        if (parent_len + 1 + last_len > PATH_MAX) {
-            error = -ENAMETOOLONG;
-            kfree(norm_path);
-            goto out_err_free;
-        }
-
-        norm_path[parent_len] = '/';
-        parent_len += 1;
-
-        strlcpy(norm_path + parent_len, last, last_len);
-        file->path_size = (uint16_t)strlen(norm_path) + 1;
-        file->attr_mask |= DYNSEC_FILE_ATTR_PATH_FULL;
-        kfree(filebuf);
-        kfree(last_component);
-        return norm_path;
-    }
-
-out_err_free:
-    kfree(filebuf);
-    kfree(last_component);
-    return ERR_PTR(error);
-}
-
 
 bool fill_in_preaction_create(struct dynsec_event *dynsec_event,
                               int dfd, const char __user *filename,
@@ -2536,10 +2523,13 @@ bool fill_in_preaction_create(struct dynsec_event *dynsec_event,
     }
 
     create->kmsg.msg.file.umode = (uint16_t)(umode & ~current_umask());
-    if (dynsec_event->event_type == DYNSEC_EVENT_TYPE_MKDIR) {
-        create->kmsg.msg.file.umode |= S_IFDIR;
-    } else if (dynsec_event->event_type == DYNSEC_EVENT_TYPE_CREATE) {
-        create->kmsg.msg.file.umode |= S_IFREG;
+    create->kmsg.msg.file.umode |= (uint16_t)(umode & S_IFMT);
+    if (!(create->kmsg.msg.file.umode & S_IFMT)) {
+        if (dynsec_event->event_type == DYNSEC_EVENT_TYPE_MKDIR) {
+            create->kmsg.msg.file.umode |= S_IFDIR;
+        } else if (dynsec_event->event_type == DYNSEC_EVENT_TYPE_CREATE) {
+            create->kmsg.msg.file.umode |= S_IFREG;
+        }
     }
 
     if (create->path && create->kmsg.msg.file.path_size) {
@@ -2550,10 +2540,11 @@ bool fill_in_preaction_create(struct dynsec_event *dynsec_event,
 }
 
 bool fill_in_preaction_rename(struct dynsec_event *dynsec_event,
-                              int newdfd, const char __user *newname,
-                              struct path *oldpath)
+                              int olddfd, const char __user *oldname,
+                              int newdfd, const char __user *newname)
 {
     int ret;
+    struct path oldpath;
     struct path newpath;
     struct dynsec_rename_event *rename = NULL;
 
@@ -2565,11 +2556,25 @@ bool fill_in_preaction_rename(struct dynsec_event *dynsec_event,
 
     fill_in_task_ctx(&rename->kmsg.msg.task);
 
-    fill_in_file_data(&rename->kmsg.msg.old_file, oldpath);
+    ret = user_path_at(olddfd, oldname, 0, &oldpath);
+    if (!ret) {
+        fill_in_file_data(&rename->kmsg.msg.old_file, &oldpath);
+        rename->old_path = dynsec_build_path(&oldpath,
+                                             &rename->kmsg.msg.old_file,
+                                             GFP_KERNEL);
+        path_put(&oldpath);
+    } else if (ret == -ENOENT) {
+        rename->old_path = build_preaction_path(olddfd, oldname, 0,
+                                                &rename->kmsg.msg.old_file);
+        // Allow this bad intent to be sent
+        if (IS_ERR(rename->old_path)) {
+            rename->old_path = NULL;
+        }
+    } else {
+        // Other path lookup errors likely won't let operation succeed
+        return false;
+    }
 
-    rename->old_path = dynsec_build_path(oldpath,
-                                         &rename->kmsg.msg.old_file,
-                                         GFP_KERNEL);
     if (rename->old_path && rename->kmsg.msg.old_file.path_size) {
         rename->kmsg.msg.old_file.path_offset = rename->kmsg.hdr.payload;
         rename->kmsg.hdr.payload += rename->kmsg.msg.old_file.path_size;
@@ -2620,6 +2625,9 @@ bool fill_in_preaction_unlink(struct dynsec_event *dynsec_event,
         unlink->kmsg.msg.file.path_offset = unlink->kmsg.hdr.payload;
         unlink->kmsg.hdr.payload += unlink->kmsg.msg.file.path_size;
     }
+
+    // file system stall mask check on path done by caller.
+
     return true;
 }
 
@@ -2744,6 +2752,8 @@ bool fill_in_preaction_setattr(struct dynsec_event *dynsec_event,
         // Tells user this is the full filepath
         fill_in_file_data(&setattr->kmsg.msg.file, path);
 
+        // file system stall mask check on path done by caller.
+
         // MUST Be GFP_ATOMIC
         setattr->path = dynsec_build_path(path,
                                           &setattr->kmsg.msg.file,
@@ -2786,7 +2796,7 @@ static char *fill_in_task_exe(struct task_struct *task,
 
     if (!IS_ERR_OR_NULL(exe_file)) {
         fill_in_file_data(dynsec_file, &exe_file->f_path);
-        exe_path = dynsec_build_path_greedy(&exe_file->f_path,
+        exe_path = dynsec_build_path(&exe_file->f_path,
                                             dynsec_file, mode);
         if (!has_gfp_atomic(mode)) {
             fput(exe_file);
