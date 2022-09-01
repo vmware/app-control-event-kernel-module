@@ -17,8 +17,19 @@
 #include "task_utils.h"
 #include "symbols.h"
 #include "config.h"
+#include "fs_utils.h"
+#include "protect.h"
+#include "path_utils.h"
+#include "wait.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0) || \
+    (defined(RHEL_MAJOR) && defined(RHEL_MINOR) && \
+        RHEL_MAJOR == 8 && RHEL_MINOR >= 6)
+// TODO: Determine if bprm_creds_from_file requires a new hook
+int dynsec_bprm_creds_for_exec(struct linux_binprm *bprm)
+#else
 int dynsec_bprm_set_creds(struct linux_binprm *bprm)
+#endif
 {
     struct dynsec_event *event = NULL;
     int ret = 0;
@@ -37,7 +48,7 @@ int dynsec_bprm_set_creds(struct linux_binprm *bprm)
         goto out;
     }
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
     if (task_in_connected_tgid(current)) {
@@ -59,7 +70,7 @@ int dynsec_bprm_set_creds(struct linux_binprm *bprm)
 
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -89,9 +100,10 @@ int dynsec_inode_unlink(struct inode *dir, struct dentry *dentry)
     }
 #endif
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
     } else {
@@ -105,6 +117,12 @@ int dynsec_inode_unlink(struct inode *dir, struct dentry *dentry)
     mode = dentry->d_inode->i_mode;
     if (!(S_ISLNK(mode) || S_ISREG(mode) || S_ISDIR(mode))) {
         goto out;
+    }
+
+    // Remove the inode read-only entry regardless of link count.
+    // Helps eliminate stale entries.
+    if (S_ISREG(mode)) {
+        inode_cache_remove_entry((unsigned long)dentry->d_inode);
     }
 
     event = alloc_dynsec_event(DYNSEC_EVENT_TYPE_UNLINK, DYNSEC_HOOK_TYPE_UNLINK,
@@ -121,7 +139,7 @@ int dynsec_inode_unlink(struct inode *dir, struct dentry *dentry)
 
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -151,9 +169,10 @@ int dynsec_inode_rmdir(struct inode *dir, struct dentry *dentry)
     }
 #endif
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
     } else {
@@ -183,7 +202,7 @@ int dynsec_inode_rmdir(struct inode *dir, struct dentry *dentry)
 
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -215,9 +234,10 @@ int dynsec_inode_rename(struct inode *old_dir, struct dentry *old_dentry,
     }
 #endif
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
     } else {
@@ -249,7 +269,7 @@ int dynsec_inode_rename(struct inode *old_dir, struct dentry *old_dentry,
 
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -340,9 +360,10 @@ int dynsec_inode_setattr(struct dentry *dentry, struct iattr *attr)
         goto out;
     }
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
     } else {
@@ -361,7 +382,7 @@ int dynsec_inode_setattr(struct dentry *dentry, struct iattr *attr)
 
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -394,9 +415,10 @@ int dynsec_inode_mkdir(struct inode *dir, struct dentry *dentry, int mode)
     }
 #endif
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
     } else {
@@ -413,7 +435,7 @@ int dynsec_inode_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -448,9 +470,10 @@ int dynsec_inode_create(struct inode *dir, struct dentry *dentry,
     }
 #endif
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
     } else {
@@ -467,7 +490,7 @@ int dynsec_inode_create(struct inode *dir, struct dentry *dentry,
 
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -497,9 +520,10 @@ int dynsec_inode_link(struct dentry *old_dentry, struct inode *dir,
     }
 #endif
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
     } else {
@@ -516,7 +540,7 @@ int dynsec_inode_link(struct dentry *old_dentry, struct inode *dir,
 
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -546,9 +570,10 @@ int dynsec_inode_symlink(struct inode *dir, struct dentry *dentry,
     }
 #endif
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
     } else {
@@ -565,7 +590,7 @@ int dynsec_inode_symlink(struct inode *dir, struct dentry *dentry,
 
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -590,18 +615,9 @@ void dynsec_inode_free_security(struct inode *inode)
     (void)inode_cache_remove_entry((unsigned long)inode);
 }
 
-static inline const struct inode * __file_inode(const struct file *file)
-{
-    if (likely(file) && file->f_path.dentry) {
-        return file->f_path.dentry->d_inode;
-    }
-    return NULL;
-}
-
 static inline bool may_report_file(const struct file *file)
 {
-    if (likely(file)) {
-        unsigned int f_flags;
+    if (file) {
         const struct inode *inode = NULL;
 
 #ifdef FMODE_STREAM
@@ -617,25 +633,30 @@ static inline bool may_report_file(const struct file *file)
             return false;
         }
 #endif
-        f_flags = file->f_flags;
+
 #ifdef O_PATH
-        if (f_flags & O_PATH) {
+        if (file->f_flags & O_PATH) {
             return false;
         }
 #endif
-        if (f_flags & O_DIRECTORY) {
+        if (file->f_flags & O_DIRECTORY) {
             return false;
         }
 
         inode = __file_inode(file);
         if (inode) {
             umode_t umode = inode->i_mode;
-#ifdef special_file
-            if (special_file(umode)) {
+
+            if (!S_ISREG(umode)) {
                 return false;
             }
-#endif /* special_file */
-            if (!S_ISREG(umode)) {
+        } else {
+            // Cannot report a file if there is no inode
+            return false;
+        }
+
+        if (file->f_path.dentry && file->f_path.dentry->d_sb) {
+            if (__is_special_filesystem(file->f_path.dentry->d_sb)) {
                 return false;
             }
         }
@@ -650,6 +671,11 @@ static inline bool may_report_file_open(const struct file *file)
 }
 static inline bool may_report_file_close(const struct file *file)
 {
+    // Ignore file closes not opened for write
+    if (!(file->f_mode & FMODE_WRITE) &&
+        !(file->f_flags & O_ACCMODE)) {
+        return false;
+    }
     return may_report_file(file);
 }
 #ifdef FMODE_NONOTIFY
@@ -695,14 +721,14 @@ int dynsec_dentry_open(struct file *file, const struct cred *cred)
         goto out;
     }
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
     if (task_in_connected_tgid(current)) {
         // Don't want to create feedback loop
         // on files we open/close from the client.
         if (!may_client_report_files()) {
-            // goto out;
+            goto out;
         }
         report_flags |= DYNSEC_REPORT_SELF;
         report_flags &= ~(DYNSEC_REPORT_STALL);
@@ -712,7 +738,7 @@ int dynsec_dentry_open(struct file *file, const struct cred *cred)
     if (inode_addr) {
         // Attempt to remove an entry if opened for write
         // or we may want to mark it disabled?
-        if (file->f_mode & FMODE_WRITE) {
+        if (file->f_mode & FMODE_WRITE || (file->f_flags & O_ACCMODE)) {
             (void)inode_cache_remove_entry(inode_addr);
         }
         // Allow for potential tracking or updating
@@ -741,7 +767,7 @@ int dynsec_dentry_open(struct file *file, const struct cred *cred)
 
     event = alloc_dynsec_event(DYNSEC_EVENT_TYPE_OPEN, DYNSEC_HOOK_TYPE_OPEN,
                                report_flags, GFP_KERNEL);
-    if (event && inode_addr) {
+    if (event && (event->report_flags & DYNSEC_REPORT_STALL) && inode_addr) {
         event->inode_addr = inode_addr;
     }
     if (!fill_in_file_open(event, file, GFP_KERNEL)) {
@@ -752,7 +778,7 @@ int dynsec_dentry_open(struct file *file, const struct cred *cred)
 
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -778,28 +804,36 @@ void dynsec_file_free_security(struct file *file)
     }
 #endif
 
-    if (!may_report_file_close(file)) {
+    if (!hooks_enabled(stall_tbl)) {
         return;
     }
-    if (!stall_tbl_enabled(stall_tbl)) {
+    // In between the TASK_EXIT and TASK_FREE hooks
+    // file descriptors are released as well. We may not
+    // want to send those CLOSE events. Unless userspace
+    // equipped to handle CLOSE events on tasks no longer alive.
+    if (!task_has_nsproxy(current)) {
+        return;
+    }
+
+    if (!may_report_file_close(file)) {
         return;
     }
     if (task_in_connected_tgid(current)) {
         // Don't want to create feedback loop
         // on files we open/close from the client.
         if (!may_client_report_files()) {
-            // return;
+            return;
         }
         report_flags |= DYNSEC_REPORT_SELF;
     }
 
     event = alloc_dynsec_event(DYNSEC_EVENT_TYPE_CLOSE, DYNSEC_HOOK_TYPE_CLOSE,
                                report_flags, GFP_ATOMIC);
-
     if (!fill_in_file_free(event, file, GFP_ATOMIC)) {
         free_dynsec_event(event);
         return;
     }
+    prepare_dynsec_event(event, GFP_ATOMIC);
     (void)enqueue_nonstall_event(stall_tbl, event);
 }
 
@@ -818,11 +852,17 @@ int dynsec_ptrace_traceme(struct task_struct *parent)
     }
 #endif
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
+    }
+
+    if (dynsec_may_protect_ptrace(parent, current)) {
+        report_flags |= DYNSEC_REPORT_DENIED;
+        report_flags |= DYNSEC_REPORT_HI_PRI;
+        ret = -EPERM;
     }
 
     event = alloc_dynsec_event(DYNSEC_EVENT_TYPE_PTRACE, DYNSEC_HOOK_TYPE_PTRACE,
@@ -859,9 +899,18 @@ int dynsec_ptrace_access_check(struct task_struct *child, unsigned int mode)
         goto out;
     }
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
+
+    // For now skip sending the event when we block ptrace events.
+    // This is more for safety long term, than event reporting.
+    if (dynsec_may_protect_ptrace(current, child)) {
+        prepare_non_report_event(DYNSEC_EVENT_TYPE_PTRACE, GFP_ATOMIC);
+        ret = -EPERM;
+        goto out;
+    }
+
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
     } else if (task_in_connected_tgid(child)) {
@@ -875,6 +924,7 @@ int dynsec_ptrace_access_check(struct task_struct *child, unsigned int mode)
         free_dynsec_event(event);
         goto out;
     }
+    prepare_dynsec_event(event, GFP_ATOMIC);
 
     (void)enqueue_nonstall_event(stall_tbl, event);
 
@@ -914,11 +964,16 @@ int dynsec_task_kill(struct task_struct *p, struct siginfo *info,
         goto out;
     }
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
     if (task_in_connected_tgid(current)) {
         report_flags |= DYNSEC_REPORT_SELF;
+    }
+    if (dynsec_may_protect_kill(p, sig)) {
+        report_flags |= DYNSEC_REPORT_DENIED;
+        report_flags |= DYNSEC_REPORT_HI_PRI;
+        ret = -EPERM;
     }
 
     event = alloc_dynsec_event(DYNSEC_EVENT_TYPE_SIGNAL, DYNSEC_HOOK_TYPE_SIGNAL,
@@ -927,6 +982,7 @@ int dynsec_task_kill(struct task_struct *p, struct siginfo *info,
         free_dynsec_event(event);
         goto out;
     }
+    prepare_dynsec_event(event, GFP_ATOMIC);
     (void)enqueue_nonstall_event(stall_tbl, event);
 
 out:
@@ -950,21 +1006,25 @@ void dynsec_sched_process_fork_tp(struct task_struct *parent,
     if (!child) {
         return;
     }
-    // Don't send thread events
-    if (child->tgid != child->pid) {
+    if (!hooks_enabled(stall_tbl)) {
         return;
     }
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    // Don't send child thread clone events
+    if (child->tgid != child->pid) {
+        // (void)task_cache_insert_new_task(child->pid, child->tgid,
+        //                                  true, GFP_ATOMIC);
         return;
     }
+    (void)task_cache_insert_new_task(child->pid, parent->tgid,
+                                     false, GFP_ATOMIC);
+
     if (task_in_connected_tgid(parent)) {
         report_flags |= DYNSEC_REPORT_SELF;
     }
 
     event = alloc_dynsec_event(DYNSEC_EVENT_TYPE_CLONE, DYNSEC_TP_HOOK_TYPE_CLONE,
                                report_flags, GFP_ATOMIC);
-    //
     if (!fill_in_clone(event, parent, child,
                        DYNSEC_TASK_IMPRECISE_START_TIME)) {
         free_dynsec_event(event);
@@ -984,7 +1044,7 @@ static void __dynsec_task_exit(struct task_struct *task,
         return;
     }
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         return;
     }
 
@@ -1034,15 +1094,7 @@ void dynsec_sched_process_free_tp(struct task_struct *task)
     __dynsec_task_exit(task, DYNSEC_HOOK_TYPE_TASK_FREE, GFP_ATOMIC);
 }
 
-// Settings to help control mmap event performance
-int mmap_report_misc = 1;
-int mmap_stall_misc = 0;
-int mmap_stall_on_exec = 1;
-int mmap_stall_on_ldso = 1;
 
-//
-//
-//
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 int dynsec_mmap_file(struct file *file, unsigned long reqprot, unsigned long prot,
                      unsigned long flags)
@@ -1076,41 +1128,17 @@ int dynsec_file_mmap(struct file *file, unsigned long reqprot, unsigned long pro
         goto out;
     }
 
-    // // Remove read-only entry if PROT_WRITE requested
-    // TODO: verify other mmap args to remove entry
-    // if (prot & PROT_WRITE) {
-    //     rm_inode_addr = (unsigned long)__file_inode(file);
-    //     inode_cache_remove_entry(rm_inode_addr);
-    // }
-
     if (!(prot & PROT_EXEC)) {
         goto out;
     }
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
 
-    if (current->in_execve ||
-        (file && (file->f_mode & FMODE_EXEC) == FMODE_EXEC)) {
-        unsigned long exec_flags = flags & (MAP_DENYWRITE | MAP_EXECUTABLE);
-
-        if (mmap_stall_on_exec && exec_flags & MAP_EXECUTABLE) {
-            report_flags |= DYNSEC_REPORT_STALL;
-        }
-        else if (mmap_stall_on_ldso) {
-            report_flags |= DYNSEC_REPORT_STALL;
-        }
-
-        // High priority even if we're not stalling
-        report_flags |= DYNSEC_REPORT_HI_PRI;
-    }
-    else {
-        if (mmap_stall_misc) {
-            report_flags |= DYNSEC_REPORT_STALL;
-        } else if (!mmap_report_misc) {
-            goto out;
-        }
+    // Stall the mmap if task is in exec or file was opened for exec
+    if (current->in_execve || (file->f_mode & FMODE_EXEC) == FMODE_EXEC) {
+        report_flags |= DYNSEC_REPORT_STALL;
     }
 
     // Don't stall on ourself
@@ -1119,6 +1147,8 @@ int dynsec_file_mmap(struct file *file, unsigned long reqprot, unsigned long pro
         report_flags &= ~(DYNSEC_REPORT_STALL);
     }
 
+    // We may to filter out mmaps events here
+
     event = alloc_dynsec_event(DYNSEC_EVENT_TYPE_MMAP, DYNSEC_HOOK_TYPE_MMAP,
                                report_flags, GFP_KERNEL);
     if (!fill_in_file_mmap(event, file, prot, flags, GFP_KERNEL)) {
@@ -1126,9 +1156,11 @@ int dynsec_file_mmap(struct file *file, unsigned long reqprot, unsigned long pro
         goto out;
     }
 
+    prepare_dynsec_event(event, GFP_KERNEL);
+
     if (event->report_flags & DYNSEC_REPORT_STALL) {
         int response = 0;
-        int rc = dynsec_wait_event_timeout(event, &response, 1000, GFP_KERNEL);
+        int rc = dynsec_wait_event_timeout(event, &response, GFP_KERNEL);
 
         if (!rc) {
             ret = response;
@@ -1160,18 +1192,25 @@ int dynsec_wake_up_new_task(struct kprobe *kprobe, struct pt_regs *regs)
     if (!p) {
         goto out;
     }
-    // Don't send thread events
-    if (p->tgid != p->pid) {
+    if (!hooks_enabled(stall_tbl)) {
         goto out;
     }
 
-    if (!stall_tbl_enabled(stall_tbl)) {
+    // Don't send thread events
+    if (p->tgid != p->pid) {
+        // Preallocate task entry for threads maybe?
+        // (void)task_cache_insert_new_task(p->pid, p->tgid,
+        //                                  true, GFP_ATOMIC);
         goto out;
+    }
+
+    if (p->real_parent) {
+        (void)task_cache_insert_new_task(p->pid, p->real_parent->tgid,
+                                         false, GFP_ATOMIC);
     }
     if (task_in_connected_tgid(p->real_parent)) {
         report_flags |= DYNSEC_REPORT_SELF;
     }
-
     event = alloc_dynsec_event(DYNSEC_EVENT_TYPE_CLONE, DYNSEC_TP_HOOK_TYPE_CLONE,
                                report_flags, GFP_ATOMIC);
     if (!fill_in_clone(event, NULL, p, 0)) {
@@ -1300,14 +1339,3 @@ ssize_t dynsec_task_dump_one(uint16_t opts, pid_t start_pid,
 
     return ret;
 }
-
-// int dynsec_task_fix_setuid(struct cred *new, const struct cred *old, int flags)
-// {
-// #if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
-//     if (g_original_ops_ptr) {
-//         return g_original_ops_ptr->task_fix_setuid(new, old, flags);
-//     }
-// #endif
-
-//     return 0;
-// }

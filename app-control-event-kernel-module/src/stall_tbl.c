@@ -15,6 +15,7 @@
 #include <linux/wait.h>
 #include <linux/poll.h>
 #include <linux/version.h>
+#include <linux/seq_file.h>
 
 #include "stall_tbl.h"
 #include "stall_reqs.h"
@@ -304,7 +305,15 @@ static u32 stall_tbl_enqueue_event(struct stall_tbl *tbl, struct dynsec_event *e
 u32 enqueue_nonstall_event(struct stall_tbl *tbl,
                            struct dynsec_event *event)
 {
-    u32 size = stall_tbl_enqueue_event(tbl, event);
+    u32 size = 0;
+
+    if ((event->report_flags & DYNSEC_REPORT_IGNORE) &&
+        ignore_mode_enabled()) {
+        free_dynsec_event(event);
+        return 0;
+    }
+
+    size = stall_tbl_enqueue_event(tbl, event);
 
     if (size) {
         if (meets_notify_threshold(size) ||
@@ -325,7 +334,15 @@ u32 enqueue_nonstall_event(struct stall_tbl *tbl,
 u32 enqueue_nonstall_event_no_notify(struct stall_tbl *tbl,
                                      struct dynsec_event *event)
 {
-    u32 size = stall_tbl_enqueue_event(tbl, event);
+    u32 size = 0;
+
+    if ((event->report_flags & DYNSEC_REPORT_IGNORE) &&
+        ignore_mode_enabled()) {
+        free_dynsec_event(event);
+        return 0;
+    }
+
+    size = stall_tbl_enqueue_event(tbl, event);
 
     if (!size) {
         free_dynsec_event(event);
@@ -361,15 +378,27 @@ stall_tbl_insert(struct stall_tbl *tbl, struct dynsec_event *event, gfp_t mode)
     entry->key.req_id = event->req_id;
     entry->key.event_type = event->event_type;
     entry->key.tid = event->tid;
+    entry->mode = DYNSEC_STALL_MODE_STALL;
+    if (deny_on_timeout_enabled()) {
+        entry->response = DYNSEC_RESPONSE_EPERM;
+    } else {
+        entry->response = DYNSEC_RESPONSE_ALLOW;
+    }
 
     // Copy over inode_addr data
     entry->inode_addr = event->inode_addr;
+
+    // Copy extra dynsec_event header related data
+    entry->report_flags = event->report_flags;
+    if (entry->report_flags & DYNSEC_REPORT_INTENT_FOUND) {
+        entry->intent_req_id = event->intent_req_id;
+    }
 
     // Build bucket lookup data
     entry->hash = stall_hash(tbl->secret, &entry->key);
     index = stall_bkt_index(entry->hash);
 
-    getrawmonotonic(&entry->start);
+    entry->start = dynsec_current_ktime;
 
     flags = lock_stall_bkt(&stall_tbl->bkt[index], flags);
     list_add(&entry->list, &tbl->bkt[index].list);
@@ -384,7 +413,8 @@ stall_tbl_insert(struct stall_tbl *tbl, struct dynsec_event *event, gfp_t mode)
 }
 
 int stall_tbl_resume(struct stall_tbl *tbl, struct stall_key *key,
-                     int response, unsigned long inode_cache_flags)
+                     int response, unsigned long inode_cache_flags,
+                     unsigned int overrided_stall_timeout)
 {
     struct stall_entry *entry;
     unsigned long flags;
@@ -398,16 +428,29 @@ int stall_tbl_resume(struct stall_tbl *tbl, struct stall_key *key,
     }
 
     if (key->event_type < 0 || key->event_type >= DYNSEC_EVENT_TYPE_MAX) {
-        return -EINVAL;
+        return -ERANGE;
     }
 
     switch (response)
     {
     case DYNSEC_RESPONSE_ALLOW:
+        overrided_stall_timeout = 0;
         break;
     case DYNSEC_RESPONSE_EPERM:
+        overrided_stall_timeout = 0;
         // Remove inode from read only cache if we deny
         inode_cache_flags = DYNSEC_CACHE_DISABLE;
+        break;
+    case DYNSEC_RESPONSE_CONTINUE:
+        inode_cache_flags = 0;
+        if (overrided_stall_timeout == 0) {
+            overrided_stall_timeout = get_continue_timeout();
+        }
+        if (overrided_stall_timeout > MAX_EXTENDED_TIMEOUT_MS) {
+            overrided_stall_timeout = MAX_EXTENDED_TIMEOUT_MS;
+        }
+        pr_info("%s:%d event %d, stall timeout overrided: %d\n",
+                __func__, __LINE__, key->event_type, overrided_stall_timeout);
         break;
 
     default:
@@ -436,15 +479,16 @@ int stall_tbl_resume(struct stall_tbl *tbl, struct stall_key *key,
     entry = lookup_entry_safe(hash, key, &tbl->bkt[index].list);
     if (entry) {
         ret = 0;
-        inode_addr = entry->inode_addr;
 
+        spin_lock(&entry->lock);
+        inode_addr = entry->inode_addr;
         entry->mode = DYNSEC_STALL_MODE_RESUME;
-        // spin_lock(&entry->lock);
         entry->response = response;
-        // spin_unlock(&entry->lock);
+        entry->stall_timeout = overrided_stall_timeout;
         if (waitqueue_active(&entry->wq)) {
             wake_up(&entry->wq);
         }
+        spin_unlock(&entry->lock);
     }
     unlock_stall_bkt(&tbl->bkt[index], flags);
 
@@ -483,6 +527,7 @@ int stall_tbl_remove_entry(struct stall_tbl *tbl, struct stall_entry *entry)
     return ret;
 }
 
+#if 0
 int stall_tbl_remove_by_key(struct stall_tbl *tbl, struct stall_key *key)
 {
     struct stall_entry *entry = NULL;
@@ -512,3 +557,4 @@ int stall_tbl_remove_by_key(struct stall_tbl *tbl, struct stall_key *key)
 
     return ret;
 }
+#endif

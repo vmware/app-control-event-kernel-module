@@ -5,7 +5,12 @@
 
 #include "dynsec.h"
 #include <linux/version.h>
+#include <linux/path.h>
 
+struct iattr;
+
+// Important for these structs to be packed as
+// they are critical to copying events to userspace.
 #pragma pack(push, 1)
 // Helper kernel structs in queue
 struct dynsec_exec_kmsg {
@@ -108,6 +113,7 @@ struct dynsec_file_event {
     struct dynsec_event event;
     struct dynsec_file_kmsg kmsg;
     char *path;
+    struct path open_path;
 };
 
 struct dynsec_mmap_event {
@@ -152,6 +158,8 @@ struct dynsec_task_dump_event {
     char *exec_path;
 };
 #pragma pack(pop)
+
+// container_of helpers
 
 // Exec Event container_of helper
 static inline struct dynsec_exec_event *
@@ -322,8 +330,8 @@ extern bool fill_in_preaction_create(struct dynsec_event *dynsec_event,
                                      int dfd, const char __user *filename,
                                      int flags, umode_t umode);
 extern bool fill_in_preaction_rename(struct dynsec_event *dynsec_event,
-                                     int newdfd, const char __user *newname,
-                                     struct path *oldpath);
+                                     int olddfd, const char __user *oldname,
+                                     int newdfd, const char __user *newname);
 extern bool fill_in_preaction_unlink(struct dynsec_event *dynsec_event,
                                      struct path *path, gfp_t mode);
 
